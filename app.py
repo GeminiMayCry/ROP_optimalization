@@ -80,8 +80,7 @@ def load_model(model_path):
 
     try:
 
-        with open(model_path, "rb") as f:
-            model_package = joblib.load(f)
+        model_package = joblib.load(model_path)
 
     except Exception as e:
 
