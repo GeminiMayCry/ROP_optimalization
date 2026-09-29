@@ -68,26 +68,63 @@ def standardize_columns(df):
 # FUNCTION: LOAD MODEL
 # ============================================================
 
+# ============================================================
+# FUNCTION: LOAD MODEL
+# ============================================================
+
+@st.cache_resource
 def load_model(model_path):
 
     model_path = os.path.abspath(model_path)
 
-    if not os.path.isfile(model_path):
-
+    # Cek file
+    if not os.path.exists(model_path):
         raise FileNotFoundError(
             f"File model tidak ditemukan:\n{model_path}"
         )
 
+    if not os.path.isfile(model_path):
+        raise RuntimeError(
+            f"Path model bukan file:\n{model_path}"
+        )
+
+    # Cek ukuran
+    file_size = os.path.getsize(model_path)
+
+    if file_size == 0:
+        raise RuntimeError(
+            "File model berukuran 0 byte."
+        )
+
     try:
 
+        # Load langsung dari path
         model_package = joblib.load(model_path)
+
+    except PermissionError as e:
+
+        raise RuntimeError(
+            "Permission denied saat membaca file model.\n"
+            f"Path: {model_path}\n"
+            f"Ukuran: {file_size / (1024 * 1024):.2f} MB\n"
+            f"Detail: {e}"
+        )
 
     except Exception as e:
 
         raise RuntimeError(
             f"File model ditemukan tetapi gagal dibaca.\n"
             f"Path: {model_path}\n"
+            f"Ukuran: {file_size / (1024 * 1024):.2f} MB\n"
+            f"Jenis error: {type(e).__name__}\n"
             f"Error: {e}"
+        )
+
+    # Cek package model
+    if not isinstance(model_package, dict):
+
+        raise ValueError(
+            "Isi file model bukan dictionary/package."
         )
 
     required_keys = [
@@ -105,7 +142,7 @@ def load_model(model_path):
     if missing_keys:
 
         raise ValueError(
-            f"Isi model tidak lengkap.\n"
+            "Isi model tidak lengkap.\n"
             f"Key yang hilang: {missing_keys}"
         )
 
@@ -964,9 +1001,9 @@ BASE_DIR = os.path.dirname(
     os.path.abspath(__file__)
 )
 
+# MODEL ADA DI ROOT REPOSITORY
 MODEL_PATH = os.path.join(
     BASE_DIR,
-    "models",
     "rop_final_rf.joblib"
 )
 
@@ -980,12 +1017,36 @@ try:
 except Exception as e:
 
     st.error(
-        "Model Random Forest tidak dapat dimuat."
+        "❌ Model Random Forest tidak dapat dimuat."
     )
 
     st.code(
         str(e)
     )
+
+    st.write("### 🔍 Debug Model")
+
+    st.write(
+        "Path:",
+        MODEL_PATH
+    )
+
+    st.write(
+        "File exists:",
+        os.path.exists(MODEL_PATH)
+    )
+
+    st.write(
+        "Is file:",
+        os.path.isfile(MODEL_PATH)
+    )
+
+    if os.path.exists(MODEL_PATH):
+
+        st.write(
+            "Ukuran file:",
+            f"{os.path.getsize(MODEL_PATH) / (1024 * 1024):.2f} MB"
+        )
 
     st.stop()
 
