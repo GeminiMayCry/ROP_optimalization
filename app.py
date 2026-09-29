@@ -77,73 +77,42 @@ def load_model(model_path):
 
     model_path = os.path.abspath(model_path)
 
-    # Cek file
     if not os.path.exists(model_path):
         raise FileNotFoundError(
-            f"File model tidak ditemukan:\n{model_path}"
+            f"File tidak ditemukan:\n{model_path}"
         )
 
-    if not os.path.isfile(model_path):
-        raise RuntimeError(
-            f"Path model bukan file:\n{model_path}"
-        )
-
-    # Cek ukuran
     file_size = os.path.getsize(model_path)
 
-    if file_size == 0:
-        raise RuntimeError(
-            "File model berukuran 0 byte."
-        )
+    st.write("🔍 DEBUG MODEL")
+    st.write("Path:", model_path)
+    st.write("Exists:", os.path.exists(model_path))
+    st.write("Is file:", os.path.isfile(model_path))
+    st.write("Size:", file_size, "bytes")
+    st.write("Size MB:", file_size / (1024 * 1024))
+
+    # Baca 200 byte pertama
+    try:
+        with open(model_path, "rb") as f:
+            header = f.read(200)
+
+        st.write("Header file:")
+        st.code(repr(header))
+
+    except Exception as e:
+        st.error(f"Gagal membaca raw file: {e}")
+        st.stop()
 
     try:
 
-        # Load langsung dari path
         model_package = joblib.load(model_path)
-
-    except PermissionError as e:
-
-        raise RuntimeError(
-            "Permission denied saat membaca file model.\n"
-            f"Path: {model_path}\n"
-            f"Ukuran: {file_size / (1024 * 1024):.2f} MB\n"
-            f"Detail: {e}"
-        )
 
     except Exception as e:
 
         raise RuntimeError(
-            f"File model ditemukan tetapi gagal dibaca.\n"
-            f"Path: {model_path}\n"
-            f"Ukuran: {file_size / (1024 * 1024):.2f} MB\n"
+            f"joblib.load gagal.\n"
             f"Jenis error: {type(e).__name__}\n"
             f"Error: {e}"
-        )
-
-    # Cek package model
-    if not isinstance(model_package, dict):
-
-        raise ValueError(
-            "Isi file model bukan dictionary/package."
-        )
-
-    required_keys = [
-        "model",
-        "features",
-        "medians"
-    ]
-
-    missing_keys = [
-        key
-        for key in required_keys
-        if key not in model_package
-    ]
-
-    if missing_keys:
-
-        raise ValueError(
-            "Isi model tidak lengkap.\n"
-            f"Key yang hilang: {missing_keys}"
         )
 
     return model_package
