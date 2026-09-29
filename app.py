@@ -29,6 +29,12 @@ st.set_page_config(
 if "drilling_data" not in st.session_state:
     st.session_state.drilling_data = None
 
+if "original_data" not in st.session_state:
+    st.session_state.original_data = None
+
+if "data_initialized" not in st.session_state:
+    st.session_state.data_initialized = False
+
 
 # ============================================================
 # CONSTANT
@@ -80,7 +86,7 @@ def load_model(model_path):
     except Exception as e:
 
         raise RuntimeError(
-            f"File PKL ditemukan tetapi gagal dibaca.\n"
+            f"File model ditemukan tetapi gagal dibaca.\n"
             f"Path: {model_path}\n"
             f"Error: {e}"
         )
@@ -100,7 +106,7 @@ def load_model(model_path):
     if missing_keys:
 
         raise ValueError(
-            f"Isi model PKL tidak lengkap.\n"
+            f"Isi model tidak lengkap.\n"
             f"Key yang hilang: {missing_keys}"
         )
 
@@ -117,7 +123,6 @@ def predict_with_model(model_package, input_df):
     features = model_package["features"]
     medians = model_package["medians"]
 
-    # Pastikan semua feature tersedia
     missing_features = [
         col
         for col in features
@@ -133,7 +138,6 @@ def predict_with_model(model_package, input_df):
 
     X = input_df[features].copy()
 
-    # Konversi numeric
     for col in features:
 
         X[col] = pd.to_numeric(
@@ -141,13 +145,11 @@ def predict_with_model(model_package, input_df):
             errors="coerce"
         )
 
-    # Inf menjadi NaN
     X = X.replace(
         [np.inf, -np.inf],
         np.nan
     )
 
-    # Isi missing menggunakan median training
     for col in features:
 
         if X[col].isna().any():
@@ -174,10 +176,6 @@ def optimize_rop_real(
     model_package
 ):
 
-    # --------------------------------------------------------
-    # Validasi kolom
-    # --------------------------------------------------------
-
     required_columns = [
         WOB_COL,
         RPM_COL
@@ -196,18 +194,10 @@ def optimize_rop_real(
             + "\n".join(missing_columns)
         )
 
-    # --------------------------------------------------------
-    # Historical WOB
-    # --------------------------------------------------------
-
     wob_history = pd.to_numeric(
         df_history[WOB_COL],
         errors="coerce"
     ).dropna()
-
-    # --------------------------------------------------------
-    # Historical RPM
-    # --------------------------------------------------------
 
     rpm_history = pd.to_numeric(
         df_history[RPM_COL],
@@ -226,12 +216,9 @@ def optimize_rop_real(
             "Tidak terdapat data RPM yang valid."
         )
 
-    # --------------------------------------------------------
-    # Search range
-    #
-    # Menggunakan percentile 5% - 95%
-    # agar kandidat tidak terlalu ekstrem.
-    # --------------------------------------------------------
+    # ========================================================
+    # SEARCH RANGE
+    # ========================================================
 
     wob_min = float(
         wob_history.quantile(0.05)
@@ -249,9 +236,9 @@ def optimize_rop_real(
         rpm_history.quantile(0.95)
     )
 
-    # --------------------------------------------------------
-    # Generate kandidat
-    # --------------------------------------------------------
+    # ========================================================
+    # GENERATE CANDIDATE
+    # ========================================================
 
     wob_values = np.linspace(
         wob_min,
@@ -282,9 +269,9 @@ def optimize_rop_real(
         candidates
     )
 
-    # --------------------------------------------------------
-    # Prediksi menggunakan model RF PKL
-    # --------------------------------------------------------
+    # ========================================================
+    # PREDICT
+    # ========================================================
 
     candidate_df[
         "Predicted_ROP"
@@ -293,18 +280,14 @@ def optimize_rop_real(
         candidate_df
     )
 
-    # --------------------------------------------------------
-    # Ranking
-    # --------------------------------------------------------
+    # ========================================================
+    # RANKING
+    # ========================================================
 
     candidate_df = candidate_df.sort_values(
         by="Predicted_ROP",
         ascending=False
     ).reset_index(drop=True)
-
-    # --------------------------------------------------------
-    # Best candidate
-    # --------------------------------------------------------
 
     best = candidate_df.iloc[0]
 
@@ -320,6 +303,34 @@ def optimize_rop_real(
             rpm_max
         )
     }
+
+
+# ============================================================
+# FUNCTION: CONVERT INPUT TO CORRECT TYPE
+# ============================================================
+
+def convert_value(value, original_dtype):
+
+    if pd.isna(value):
+        return np.nan
+
+    try:
+
+        if pd.api.types.is_integer_dtype(original_dtype):
+            return int(value)
+
+        elif pd.api.types.is_float_dtype(original_dtype):
+            return float(value)
+
+        elif pd.api.types.is_numeric_dtype(original_dtype):
+            return float(value)
+
+        else:
+            return str(value)
+
+    except Exception:
+
+        return value
 
 
 # ============================================================
@@ -355,78 +366,82 @@ uploaded_file = st.sidebar.file_uploader(
 
 if uploaded_file is not None:
 
-    try:
+    # Gunakan nama file sebagai identitas dataset
+    file_id = (
+        uploaded_file.name,
+        uploaded_file.size
+    )
 
-        df_upload = pd.read_csv(
-            uploaded_file
-        )
+    if (
+        "current_file_id" not in st.session_state
+        or st.session_state.current_file_id != file_id
+    ):
 
-        # Standardisasi kolom
-        df_upload = standardize_columns(
-            df_upload
-        )
+        try:
 
-        # Konversi kolom ke numeric jika memungkinkan
-        for col in df_upload.columns:
+            df_upload = pd.read_csv(
+                uploaded_file
+            )
 
-            converted = pd.to_numeric(
-                df_upload[col],
+            # Standardisasi kolom
+            df_upload = standardize_columns(
+                df_upload
+            )
+
+            # Konversi numeric jika memungkinkan
+            for col in df_upload.columns:
+
+                converted = pd.to_numeric(
+                    df_upload[col],
+                    errors="coerce"
+                )
+
+                if converted.notna().mean() > 0.5:
+
+                    df_upload[col] = converted
+
+            # Validasi Hole Depth
+            if DEPTH_COL not in df_upload.columns:
+
+                st.error(
+                    f"Kolom '{DEPTH_COL}' tidak ditemukan."
+                )
+
+                st.stop()
+
+            # Sort Hole Depth
+            df_upload[DEPTH_COL] = pd.to_numeric(
+                df_upload[DEPTH_COL],
                 errors="coerce"
             )
 
-            # Jika sebagian besar data berhasil menjadi numeric,
-            # gunakan hasil konversinya.
-            if converted.notna().mean() > 0.5:
-
-                df_upload[col] = converted
-
-        # ----------------------------------------------------
-        # Validasi Hole Depth
-        # ----------------------------------------------------
-
-        if DEPTH_COL not in df_upload.columns:
-
-            st.error(
-                f"Kolom '{DEPTH_COL}' tidak ditemukan."
+            df_upload = df_upload.dropna(
+                subset=[DEPTH_COL]
             )
 
-            st.stop()
+            df_upload = df_upload.sort_values(
+                DEPTH_COL
+            ).reset_index(drop=True)
 
-        # ----------------------------------------------------
-        # Sort Hole Depth
-        # ----------------------------------------------------
+            # Simpan original
+            st.session_state.original_data = (
+                df_upload.copy()
+            )
 
-        df_upload[DEPTH_COL] = pd.to_numeric(
-            df_upload[DEPTH_COL],
-            errors="coerce"
-        )
+            # Simpan working data
+            st.session_state.drilling_data = (
+                df_upload.copy()
+            )
 
-        df_upload = df_upload.dropna(
-            subset=[DEPTH_COL]
-        )
+            st.session_state.current_file_id = file_id
 
-        df_upload = df_upload.sort_values(
-            DEPTH_COL
-        ).reset_index(drop=True)
+            st.session_state.data_initialized = True
 
-        # ----------------------------------------------------
-        # Simpan ke session
-        # ----------------------------------------------------
+        except Exception as e:
 
-        st.session_state.drilling_data = (
-            df_upload
-        )
-
-        st.sidebar.success(
-            f"Data berhasil dimuat: "
-            f"{len(df_upload):,} baris"
-        )
-
-    except Exception as e:
-
-        st.sidebar.error(
-            f"Gagal membaca CSV:\n{e}"
-        )
+            st.sidebar.error(
+                f"Gagal membaca CSV:\n{e}"
+            )
 
 
 # ============================================================
@@ -434,8 +449,7 @@ if uploaded_file is not None:
 # ============================================================
 
 if (
-    "drilling_data" not in st.session_state
-    or st.session_state.drilling_data is None
+    st.session_state.drilling_data is None
 ):
 
     st.warning(
@@ -460,6 +474,343 @@ if df.empty:
     )
 
     st.stop()
+
+
+# ============================================================
+# DATA MANAGEMENT
+# ============================================================
+
+st.divider()
+
+st.header(
+    "🗃️ Data Management"
+)
+
+st.caption(
+    "Gunakan menu ini untuk menambah, mengedit, atau "
+    "menghapus data drilling sebagai simulasi kondisi real-time."
+)
+
+
+# ============================================================
+# TABS
+# ============================================================
+
+tab_add, tab_edit, tab_delete, tab_reset = st.tabs(
+    [
+        "➕ Tambah Data",
+        "✏️ Edit Data",
+        "🗑️ Hapus Data",
+        "🔄 Reset Data"
+    ]
+)
+
+
+# ============================================================
+# TAB 1 - ADD DATA
+# ============================================================
+
+with tab_add:
+
+    st.subheader(
+        "Tambah Baris Drilling"
+    )
+
+    st.write(
+        f"Jumlah variabel: **{len(df.columns)}**"
+    )
+
+    st.write(
+        "Masukkan nilai untuk setiap variabel."
+    )
+
+    with st.form(
+        "add_row_form",
+        clear_on_submit=True
+    ):
+
+        new_values = {}
+
+        columns = df.columns.tolist()
+
+        # Buat input berdasarkan tipe data
+        for col in columns:
+
+            dtype = df[col].dtype
+
+            if pd.api.types.is_numeric_dtype(dtype):
+
+                current_mean = pd.to_numeric(
+                    df[col],
+                    errors="coerce"
+                ).median()
+
+                if pd.isna(current_mean):
+                    current_mean = 0.0
+
+                new_values[col] = st.number_input(
+                    col,
+                    value=float(current_mean),
+                    format="%.4f",
+                    key=f"add_{col}"
+                )
+
+            else:
+
+                new_values[col] = st.text_input(
+                    col,
+                    key=f"add_{col}"
+                )
+
+        add_submit = st.form_submit_button(
+            "➕ Tambahkan Baris",
+            use_container_width=True
+        )
+
+        if add_submit:
+
+            new_row = {}
+
+            for col in columns:
+
+                new_row[col] = convert_value(
+                    new_values[col],
+                    df[col].dtype
+                )
+
+            new_df = pd.DataFrame(
+                [new_row]
+            )
+
+            df = pd.concat(
+                [
+                    df,
+                    new_df
+                ],
+                ignore_index=True
+            )
+
+            # Sort berdasarkan Hole Depth
+            if DEPTH_COL in df.columns:
+
+                df[DEPTH_COL] = pd.to_numeric(
+                    df[DEPTH_COL],
+                    errors="coerce"
+                )
+
+                df = df.sort_values(
+                    DEPTH_COL
+                ).reset_index(drop=True)
+
+            st.session_state.drilling_data = df
+
+            st.success(
+                "✅ Data berhasil ditambahkan."
+            )
+
+            st.rerun()
+
+
+# ============================================================
+# TAB 2 - EDIT DATA
+# ============================================================
+
+with tab_edit:
+
+    st.subheader(
+        "Edit Data Drilling"
+    )
+
+    if len(df) == 0:
+
+        st.info(
+            "Tidak ada data yang dapat diedit."
+        )
+
+    else:
+
+        selected_index = st.selectbox(
+            "Pilih index/baris yang ingin diedit",
+            options=df.index.tolist(),
+            format_func=lambda x: (
+                f"Index {x} | "
+                f"Hole Depth = {df.loc[x, DEPTH_COL]}"
+            )
+        )
+
+        selected_row = df.loc[
+            selected_index
+        ]
+
+        with st.form(
+            "edit_row_form"
+        ):
+
+            edited_values = {}
+
+            for col in df.columns:
+
+                dtype = df[col].dtype
+
+                value = selected_row[col]
+
+                if pd.api.types.is_numeric_dtype(dtype):
+
+                    if pd.isna(value):
+                        value = 0.0
+
+                    edited_values[col] = st.number_input(
+                        col,
+                        value=float(value),
+                        format="%.4f",
+                        key=f"edit_{selected_index}_{col}"
+                    )
+
+                else:
+
+                    edited_values[col] = st.text_input(
+                        col,
+                        value="" if pd.isna(value)
+                        else str(value),
+                        key=f"edit_{selected_index}_{col}"
+                    )
+
+            edit_submit = st.form_submit_button(
+                "💾 Simpan Perubahan",
+                use_container_width=True
+            )
+
+            if edit_submit:
+
+                for col in df.columns:
+
+                    df.loc[
+                        selected_index,
+                        col
+                    ] = convert_value(
+                        edited_values[col],
+                        df[col].dtype
+                    )
+
+                # Sort kembali berdasarkan depth
+                df[DEPTH_COL] = pd.to_numeric(
+                    df[DEPTH_COL],
+                    errors="coerce"
+                )
+
+                df = df.sort_values(
+                    DEPTH_COL
+                ).reset_index(drop=True)
+
+                st.session_state.drilling_data = df
+
+                st.success(
+                    "✅ Data berhasil diperbarui."
+                )
+
+                st.rerun()
+
+
+# ============================================================
+# TAB 3 - DELETE DATA
+# ============================================================
+
+with tab_delete:
+
+    st.subheader(
+        "Hapus Data Drilling"
+    )
+
+    if len(df) == 0:
+
+        st.info(
+            "Tidak ada data untuk dihapus."
+        )
+
+    else:
+
+        selected_delete = st.multiselect(
+            "Pilih index/baris yang ingin dihapus",
+            options=df.index.tolist(),
+            format_func=lambda x: (
+                f"Index {x} | "
+                f"Hole Depth = {df.loc[x, DEPTH_COL]}"
+            )
+        )
+
+        if selected_delete:
+
+            st.warning(
+                f"{len(selected_delete)} baris akan dihapus."
+            )
+
+            if st.button(
+                "🗑️ Hapus Baris Terpilih",
+                type="primary",
+                use_container_width=True
+            ):
+
+                df = df.drop(
+                    index=selected_delete
+                ).reset_index(drop=True)
+
+                st.session_state.drilling_data = df
+
+                st.success(
+                    f"✅ {len(selected_delete)} baris berhasil dihapus."
+                )
+
+                st.rerun()
+
+
+# ============================================================
+# TAB 4 - RESET
+# ============================================================
+
+with tab_reset:
+
+    st.subheader(
+        "Reset Data"
+    )
+
+    st.write(
+        "Reset akan mengembalikan data ke kondisi "
+        "saat pertama kali CSV di-upload."
+    )
+
+    if st.button(
+        "🔄 Reset ke Data Awal",
+        use_container_width=True
+    ):
+
+        st.session_state.drilling_data = (
+            st.session_state.original_data.copy()
+        )
+
+        st.success(
+            "✅ Data berhasil dikembalikan ke kondisi awal."
+        )
+
+        st.rerun()
+
+
+# ============================================================
+# CURRENT DATA TABLE
+# ============================================================
+
+st.subheader(
+    "📋 Current Drilling Dataset"
+)
+
+st.write(
+    f"Total baris saat ini: **{len(df):,}**"
+)
+
+st.dataframe(
+    df,
+    use_container_width=True,
+    height=350
+)
 
 
 # ============================================================
@@ -518,6 +869,8 @@ if missing_columns:
 latest = df.iloc[-1]
 
 
+st.divider()
+
 st.subheader(
     "Current Drilling Condition"
 )
@@ -526,9 +879,9 @@ st.subheader(
 col1, col2, col3, col4 = st.columns(4)
 
 
-# ------------------------------------------------------------
-# Hole Depth
-# ------------------------------------------------------------
+# ============================================================
+# HOLE DEPTH
+# ============================================================
 
 with col1:
 
@@ -538,9 +891,9 @@ with col1:
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # WOB
-# ------------------------------------------------------------
+# ============================================================
 
 with col2:
 
@@ -557,9 +910,9 @@ with col2:
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # RPM
-# ------------------------------------------------------------
+# ============================================================
 
 with col3:
 
@@ -576,9 +929,9 @@ with col3:
     )
 
 
-# ------------------------------------------------------------
-# Current ROP
-# ------------------------------------------------------------
+# ============================================================
+# CURRENT ROP
+# ============================================================
 
 with col4:
 
@@ -771,7 +1124,6 @@ if st.button(
 
         r1, r2 = st.columns(2)
 
-
         with r1:
 
             st.metric(
@@ -783,7 +1135,6 @@ if st.button(
                 "WOB Maximum",
                 f"{optimization['wob_range'][1]:.2f}"
             )
-
 
         with r2:
 
@@ -814,13 +1165,11 @@ if st.button(
             ]
         ].head(10).copy()
 
-
         top10.columns = [
             "WOB",
             "RPM",
             "Predicted ROP"
         ]
-
 
         st.dataframe(
             top10,
@@ -843,7 +1192,6 @@ if st.button(
             values="Predicted_ROP"
         )
 
-
         fig = px.imshow(
 
             heatmap_data,
@@ -861,7 +1209,6 @@ if st.button(
 
             aspect="auto"
         )
-
 
         st.plotly_chart(
             fig,
@@ -881,7 +1228,6 @@ if st.button(
             latest
             .to_frame(name="Value")
         )
-
 
         st.dataframe(
             latest_display,
