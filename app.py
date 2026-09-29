@@ -1004,6 +1004,7 @@ BASE_DIR = os.path.dirname(
 # MODEL ADA DI ROOT REPOSITORY
 MODEL_PATH = os.path.join(
     BASE_DIR,
+    "models",
     "rop_final_rf.joblib"
 )
 
